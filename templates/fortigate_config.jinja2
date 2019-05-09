@@ -1,3 +1,61 @@
+{# Create address objects #}
+config firewall address
+{% set addr_set, addr_set_mod = dict(), dict() %}
+{% for id, content in policy.items() %}
+    {# Retrieve the deepest nested node (i.e. non-group objects  #}
+    {% do addr_set.update((content['src_addr']|deepest_node)),
+          addr_set.update((content['dst_addr']|deepest_node)) %}
+{% endfor %}
+{% for desc, subnet in addr_set.items() if subnet %}
+    {# Retrieve prefix and mask #}
+    {% set prefix, mask = subnet[0].split('/')[0], subnet[0].split('/')[1] %}
+    {% if subnet[0]|check_dns %} {# Handle FQDN objects #}
+        {% set mod_obj_name = desc %}
+        edit "{{ desc }}"
+        set type fqdn
+        set fqdn "{{ subnet[0] }}"
+    {% elif mask|check_wildcard %} {# Handle wildcard objects #}
+        {% set mod_obj_name = 'NET-' + prefix + '-WC' %}
+        edit "{{ mod_obj_name }}"
+        set type wildcard
+        set subnet "{{ prefix }}" "{{ mask }}"
+    {% else %}
+        {% set mod_obj_name = 'NET-' + prefix + '-' + mask|mask_to_cidr|string %}
+        edit "NET-{{ prefix }}-{{ mask|mask_to_cidr }}"
+        set type ipmask
+        set subnet "{{ prefix }}" "{{ mask }}"
+    {% endif %}
+    {# Create new address mapping with modified names #}
+    {% do addr_set_mod.update({desc: mod_obj_name}) %}
+    {# Set misc. address object config #}
+    {{ 'set comment "' + desc + '"' if not desc|check_ip_addr }} {# Filter out redundant comments for IP networks #}
+    set color 13
+    next
+{% endfor %}
+end
+
+{# Create address group objects #}
+config firewall addrgrp
+{% set addr_group_set = dict() %}
+{% for id, content in policy.items() %}
+    {# Retrieve all keys for dicts with depth (i.e. groups) #}
+    {% do addr_group_set.update((content['src_addr']|retrieve_groups)),
+          addr_group_set.update((content['dst_addr']|retrieve_groups)) %}
+{% endfor %}
+{# Construct group objects #}
+{% for desc, content in addr_group_set.items()|reverse if content %} {# Reverse dict to create nesting before parent #}
+    {# Map group members to new addr. object naming convention. Additionally, handle empty groups #}
+    edit "{{ desc }}"
+    {% for group_member in content -%}
+        {% set member = (addr_set_mod[group_member] if not addr_group_set[group_member] else group_member) -%}
+        {{ 'set member' if loop.first }} {{ '"' if member }}{{ member }}{{ '"' if member }}
+    {%- endfor %}
+    {# Set misc. address group config #}
+    set color 13
+    next
+{% endfor %}
+end
+
 {# Create service objects #}
 config firewall service custom
 {% set srv_set, srv_set_mod = dict(), dict() %}
@@ -55,6 +113,75 @@ config firewall service group
     next
 {% endfor %}
 end
+
+{# Create SNAT pools #}
+config firewall ippool
+{% for id, content in policy.items() %}
+    {% if content['nat_src_range_start'] %}
+        edit "SNAT_POOL_{{ content['nat_src_range_start'] + '-'
+              + content['nat_src_range_end'].split('.')[-1] }}
+        set startip {{ content['nat_src_range_start'] }}
+        set endip {{ content['nat_src_range_end'] }}
+        set arp-reply disable
+        next
+    {% endif %}
+{% endfor %}
+end
+
+
+{# Create DNAT pools ('VIPs') #}
+{# TODO: Finish up mapped ip #}
+{# TODO: Auto-generate DNAT firewall rules towards DNAT VIPs #}
+{# TODO: Convert all DNAT IPs to VIPs. https://cookbook.fortinet.com/using-virtual-ips-configure-port-forwarding-54/#}
+{# TODO: Create a VIP for every mapped IP. Juniper combines this, Fortigate can't. Loop over source address ranges #}
+{# TODO: Create FW policy for every VIP mapped IP#}
+{# TODO: Fix SNAT without DIP groups?#}
+{# TODO: Create services for NAT destinations. Currently not included #}
+
+{# TODO:
+    FGT60E4Q16009972 (test_vip) # set mappedip
+    *IP    ranges	Input each member (separated by space) in the format of IP (x.x.x.x),
+    IP subnet (x.x.x.x/y) or IP range (x.x.x.x-y.y.y.y).
+#}
+
+{#config firewall vip#}
+{#    edit "dest_nat"#}
+{#        set uuid 0ed4ee32-70d7-51e9-9dcf-3e6b3fd2c3ce#}
+{#        set comment "test"#}
+{#        set type server-load-balance#}
+{#        set extip 91.224.55.227#}
+{#        set extintf "any"#}
+{#        set server-type tcp#}
+{#        set extport 7547#}
+{#        config realservers#}
+{#            edit 1#}
+{#                set ip 91.224.55.227#}
+{#                set port 444#}
+{#            next#}
+{#        end#}
+{#    next#}
+{#end#}
+
+
+config firewall vip
+{% for id, content in policy.items() %}
+    {% if content['nat_dst_ip'] %}
+        {% set ip_range_start, ip_range_end = content['nat_dst_ip']|to_range %}
+        {% set prefix, mask = content['nat_dst_ip'].split('/')[0], content['nat_dst_ip'].split('/')[1] %}
+        edit "DNAT_POOL_{{ prefix }}-{{ mask|mask_to_cidr }}"
+        {{ 'set service "PORT-DST-TCP-' + content['nat_dst_port'] if content['nat_dst_port'] }}
+        set extip {{ ip_range_start }}-{{ ip_range_end }}
+        set extintf "any"
+        set portforward enable
+        set comment "FROM: {{ content['src_addr'].keys()|list|join(', ') }} || TO:
+        {{ content['dst_addr'].keys()|list|join(', ') }}"
+        set color 13
+        set mappedip {# <TO_BE_FILLED> #}
+        next
+    {% endif %}
+{% endfor %}
+end
+
 
 {# Generate firewall policies #}
   {# Unhandled fields:
