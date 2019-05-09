@@ -1,0 +1,101 @@
+{# Create service objects #}
+config firewall service custom
+{% set srv_set, srv_set_mod = dict(), dict() %}
+{% for id, content in policy.items() %} {% do srv_set.update((content['pol_proto']|deepest_node)) %} {% endfor %}
+{% for desc, protocols in srv_set.items() if not "any" in protocols %}
+    {% for proto in protocols %}
+        {% set _proto = proto.split('_') %}
+        {# Handle IP services #}
+        {%- if _proto|length == 1 -%}
+            {% set proto_id = 'IP-PROTO-' + proto.split('-')[1] %}
+            edit {{ proto_id }}
+            set protocol-number {{ proto.split('-')[1] }}
+        {# Handle TCP/UDP destination services #}
+        {%- elif proto.split('_')[2] == "0-65535" -%}
+            {% set proto_id = 'PORT-DST-' + _proto[0]|upper + '-' + _proto[4] %}
+            edit {{ proto_id }}
+            set {{ _proto[0] }}-portrange {{ _proto[4] }}
+        {# Handle TCP/UDP source and destination services #}
+        {%- else -%}
+            {% set proto_id = 'PORT-SRC-' + _proto[0]|upper + '-' + _proto[2] +
+                              '-DST-' + _proto[0]|upper + '-' + _proto[4] %}
+            edit {{ proto_id }}
+            set {{ _proto[0] }}-portrange {{ _proto[4] }}:{{ _proto[2] }}
+        {% endif %}
+        {# Create service mapping for firewall policy lookup #}
+        {% do srv_set_mod.update({desc: []}) if not srv_set_mod[desc] %}  {# Set default value to list() #}
+        {% do srv_set_mod[desc].append(proto_id) if proto_id not in srv_set_mod[desc] %}
+        {# Set misc. service configuration #}
+        set comment "{{ desc }}"
+        set color 21
+        next
+    {% endfor %}
+{% endfor %}
+end
+
+{# Create service groups #}
+config firewall service group
+{% set srv_group_set = dict() %}
+{% for id, content in policy.items() %}
+    {# Retrieve all keys for dicts with depth (i.e. groups) #}
+    {% do srv_group_set.update((content['pol_proto']|retrieve_groups)) %}
+{% endfor %}
+{% for group, members in srv_group_set.items()|reverse %} {# Reverse dict to create nesting before parent #}
+    edit "{{ group }}"
+    {% for group_member in members -%}
+        {%- if not srv_group_set[group_member] -%}
+            {%- set member = srv_set_mod[group_member]
+                    if srv_set_mod[group_member]|length < 1
+                    else srv_set_mod[group_member]|join('" "') -%}
+        {%- else -%}
+            {%- set member = group_member -%}
+        {%- endif -%}
+        {{ 'set member' if loop.first }} "{{ member }}"
+    {%- endfor %}
+    next
+{% endfor %}
+end
+
+{# Generate firewall policies #}
+  {# Unhandled fields:
+    - L7 filtering through the 'pol_app' field. Can be enabled with:
+      {{ 'set application-list ' + rule[id]['pol_app'] if rule[id]['pol_app']}}
+    - Traffic shaping through the 'sess_lim' field. This requires additional
+      traffic shapers and matching policies. #}
+config firewall policy
+{% for id, content in policy.items() %}
+    edit {{ id }}
+        {# Set rule identifiers #}
+        set name rule_id_{{ id }}
+        {{ 'set comments ' + content['pol_name'] if content['pol_name']}}
+        {# Set policy action and state #}
+        set action {{ content['pol_action'] }}
+        set status {{ 'disable' if content['pol_state'] == 'disabled' else 'enable' }}
+        {# Set interfaces #}
+        set srcintf "{{ content['src_zone'] }}"
+        set dstintf "{{ content['dst_zone'] }}"
+        {# Set SRC and DST objects #}
+        set srcaddr "{{ content['src_addr']|join('" "') }}"
+        set dstaddr "{{ content['dst_addr']|join('" "') }}"
+        {# Handle services and applications #}
+        {# TODO: Correctly handle service groups #}
+        {% set policy_services = [] %}
+        {% for service in content['pol_proto'] %}
+            {% do policy_services.append(srv_set_mod[service])
+               if srv_set_mod[service] not in policy_services %}
+        {% endfor %}
+        set service "{{ policy_services|flatten|join('" "') or 'any' }}" {# Default = 'any' #}
+        {# Handle NAT #} {# TODO: Handle Destination NAT policies. Currently erroneously unhandled #}
+        {% if content['nat_src_range_start'] %}
+            set nat enable
+            set ippool enable
+            set poolname SNAT_POOL_{{ content['nat_src_range_start']
+            + '-' + content['nat_src_range_end'].split('.')[-1] }}
+        {% endif %}
+        {# Handle miscellaneous #}
+        set schedule "always"
+        set fsso disable
+        {{ 'set logtraffic all' if content['log_action'] == 'log'}}
+    next
+{% endfor %}
+end

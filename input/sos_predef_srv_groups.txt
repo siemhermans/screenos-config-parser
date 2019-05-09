@@ -1,0 +1,13 @@
+ssg550:ssg550A(M)-> get service group APPLE-ICHAT | i Members
+ Members: "AOL" "APPLE-ICHAT-SNATMAP" "DNS" "HTTP" "HTTPS" "SIP"
+ssg550:ssg550A(M)-> get service group MGCP | i Members
+ Members: "MGCP-CA" "MGCP-UA"
+ssg550:ssg550A(M)-> get service group MS-AD | i Members
+ Members: "MS-AD-BR" "MS-AD-DRSUAPI" "MS-AD-DSROLE" "MS-AD-DSSETUP"
+ssg550:ssg550A(M)-> get service group MS-EXCHANGE | i Members
+ Members: "MS-EXCHANGE-DATABASE" "MS-EXCHANGE-DIRECTORY" "MS-EXCHANGE-INFO-STORE" "MS-EXCHANGE-MTA" "MS-EXCHANGE-STORE" "MS-EXCHANGE-SYSATD"
+ssg550:ssg550A(M)-> get service group MS-IIS | i Members
+ Members: "MS-IIS-COM" "MS-IIS-IMAP4" "MS-IIS-INETINFO" "MS-IIS-NNTP" "MS-IIS-POP3" "MS-IIS-SMTP"
+ssg550:ssg550A(M)-> get service group VOIP | i Members
+ Members: "H.323" "MGCP-CA" "MGCP-UA" "SCCP" "SIP"
+
